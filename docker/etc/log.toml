@@ -1,0 +1,15 @@
+service-type = "LOG"
+data-dir = "./mo-data"
+
+[log]
+level = "debug"
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+mpool-profiling = true
+
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

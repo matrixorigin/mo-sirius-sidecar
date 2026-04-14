@@ -1,0 +1,4 @@
+build/
+sirius/.pixi/
+*.o
+*.a

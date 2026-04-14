@@ -8,7 +8,7 @@
 
 This document describes the architecture of the **mo-sirius-sidecar**: a DuckDB-based
 query sidecar for **MatrixOne** (a cloud-native HTAP database). Analytical workloads
-annotated with `/*+ GPU */` hints in MO are rewritten and forwarded to this sidecar,
+annotated with `/*+ SIDECAR */` (CPU) or `/*+ SIDECAR GPU */` (GPU) hints in MO are rewritten and forwarded to this sidecar,
 which reads TAE storage objects directly and executes queries using DuckDB's vectorized
 engine.
 
@@ -29,16 +29,17 @@ The sidecar consists of two statically-linked DuckDB extensions:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     User / Application                       │
-│      /*+ GPU */ SELECT ... FROM tpch.lineitem WHERE ...      │
+│      /*+ SIDECAR [GPU] */ SELECT ... FROM tpch.lineitem WHERE ...  │
 └───────────────────────────┬─────────────────────────────────┘
                             │ MySQL protocol
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                       MatrixOne (MO)                         │
-│  1. Detect /*+ GPU */ hint                                   │
+│  1. Detect /*+ SIDECAR [GPU] */ hint                         │
 │  2. Rewrite: table refs → tae_scan(manifest_url)             │
-│  3. POST rewritten SQL to sidecar                            │
-│  4. Translate JSONCompact response to MySQL result set        │
+│  3. If GPU: wrap in gpu_execution()                          │
+│  4. POST rewritten SQL to sidecar                            │
+│  5. Translate JSONCompact response to MySQL result set        │
 └───────────────────────────┬─────────────────────────────────┘
                             │ HTTP POST
                             ▼

@@ -2,7 +2,7 @@
 
 DuckDB-based query sidecar for MatrixOne, powered by the
 [Sirius](https://github.com/matrixorigin/sirius) GPU execution engine.
-Queries annotated with `/*+ GPU */` in MO are rewritten and forwarded to this
+Queries annotated with `/*+ SIDECAR */` (CPU) or `/*+ SIDECAR GPU */` (GPU) in MO are rewritten and forwarded to this
 sidecar, which reads TAE storage objects directly and returns results via HTTP.
 
 ## Extensions
@@ -144,12 +144,15 @@ curl 'http://localhost:9876/?default_format=JSONCompact&query=SELECT+42'
    ```toml
    # etc/launch/cn.toml
    [cn.frontend]
-   gpuSidecarUrl = "http://localhost:9876"
+   sidecarUrl = "http://localhost:9876"
    ```
-   Or per-session: `SET gpu_sidecar_url = 'http://localhost:9876';`
-4. Run queries with the GPU hint (note: `--comments` flag needed for mariadb client):
+   Or per-session: `SET sidecar_url = 'http://localhost:9876';`
+4. Run queries with the sidecar hint (note: `--comments` flag needed for mariadb client):
    ```sql
-   /*+ GPU */ SELECT count(*) FROM tpch.lineitem WHERE l_shipdate < '1998-09-01';
+   -- CPU mode (plain DuckDB):
+   /*+ SIDECAR */ SELECT count(*) FROM tpch.lineitem WHERE l_shipdate < '1998-09-01';
+   -- GPU mode (Sirius, wraps in gpu_execution()):
+   /*+ SIDECAR GPU */ SELECT count(*) FROM tpch.lineitem WHERE l_shipdate < '1998-09-01';
    ```
 
 ## How it works
@@ -157,7 +160,7 @@ curl 'http://localhost:9876/?default_format=JSONCompact&query=SELECT+42'
 ```
 Client                  MatrixOne                Sidecar (DuckDB)
   │                         │                         │
-  │  /*+ GPU */ SELECT ...  │                         │
+  │  /*+ SIDECAR [GPU] */ ...  │                         │
   │────────────────────────>│                         │
   │                         │  GET /debug/tae/manifest│
   │                         │  (internal, for schema) │
