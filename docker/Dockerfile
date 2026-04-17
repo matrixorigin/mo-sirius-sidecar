@@ -81,7 +81,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libnuma1 libgomp1 tini && \
+        libnuma1 libgomp1 curl tini && \
     rm -rf /var/lib/apt/lists/*
 
 # MO binary
@@ -94,9 +94,11 @@ COPY docker/etc/cn.toml     /etc/launch/cn.toml
 COPY docker/etc/tn.toml     /etc/launch/tn.toml
 COPY docker/etc/log.toml    /etc/launch/log.toml
 
-# Sidecar binary + pixi runtime libs
+# Sidecar binary + pixi runtime libs + Sirius config
 COPY --from=sidecar-builder /sidecar/build/release-gpu/duckdb /sidecar/duckdb
 COPY --from=sidecar-builder /sidecar-runtime-libs/ /usr/local/lib/
+COPY sirius.yaml /etc/sidecar/sirius.yaml
+ENV SIRIUS_CONFIG_FILE=/etc/sidecar/sirius.yaml
 
 RUN ldconfig
 

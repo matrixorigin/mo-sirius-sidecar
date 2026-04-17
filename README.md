@@ -5,6 +5,18 @@ DuckDB-based query sidecar for MatrixOne, powered by the
 Queries annotated with `/*+ SIDECAR */` (CPU) or `/*+ SIDECAR GPU */` (GPU) in MO are rewritten and forwarded to this
 sidecar, which reads TAE storage objects directly and returns results via HTTP.
 
+## Execution Paths
+
+| Path | Hint | Engine | Scan Pipeline |
+|------|------|--------|---------------|
+| **CPU** | `/*+ SIDECAR */` | DuckDB vectorized | `tae_scan()` → pread → LZ4 (CPU) → DuckDB vectors |
+| **GPU** | `/*+ SIDECAR GPU */` | Sirius + cuDF | `tae_scan_task` → pread → pinned host → cudaMemcpy → nvCOMP LZ4 (GPU) → CUDA decode → cudf tables |
+
+The GPU path bypasses DuckDB vectors entirely — compressed TAE data goes directly from
+disk to GPU memory, with decompression and column decoding performed by CUDA kernels.
+Filter predicates are pushed down and evaluated on GPU via `cudf::compute_column()`.
+See [DESIGN.md §13](DESIGN.md#13-gpu-native-tae-scan-sirius) for full architecture.
+
 ## Extensions
 
 | Extension | Source | Description |
@@ -216,12 +228,15 @@ native execution (the hint is stripped).
   with a 20-second `ResponseHeaderTimeout`. The sidecar HTTP client in MO must use
   a dedicated `http.Transport` to avoid this — see `pkg/frontend/sidecar_offload.go`.
 - **GPU VRAM limits:** Multi-table joins at SF100+ may hang if the GPU has
-  insufficient VRAM (tested: RTX 3070 4GB handles SF10 fully, SF100 Q1-Q2 only).
+  insufficient VRAM (tested: RTX 3070 8GB handles SF10 fully, SF100 Q1-Q2 only).
+- **GPU scan overhead at small scale:** At SF10, the GPU TAE scan path is ~2.5× slower
+  than CPU due to host→GPU transfer overhead dominating. The GPU path is designed for
+  SF100+ where nvCOMP LZ4 throughput (~300 GB/s) far exceeds CPU decompression (~4 GB/s).
 
 ## How it works
 
 ```
-Client                  MatrixOne                Sidecar (DuckDB)
+Client                  MatrixOne                Sidecar (DuckDB + Sirius)
   │                         │                         │
   │  /*+ SIDECAR [GPU] */ ...  │                         │
   │────────────────────────>│                         │
@@ -230,12 +245,27 @@ Client                  MatrixOne                Sidecar (DuckDB)
   │                         │                         │
   │                         │  Rewrite: table refs →  │
   │                         │  tae_scan(manifest_url) │
+  │                         │  GPU: wrap in           │
+  │                         │  gpu_execution()        │
   │                         │                         │
   │                         │  POST rewritten SQL     │
   │                         │────────────────────────>│
-  │                         │                         │ tae_scan reads
-  │                         │                         │ TAE objects from
-  │                         │                         │ shared storage
+  │                         │                         │
+  │                         │                         │ CPU path:
+  │                         │                         │  tae_scan → pread →
+  │                         │                         │  LZ4 decompress (CPU) →
+  │                         │                         │  DuckDB vectors →
+  │                         │                         │  DuckDB engine
+  │                         │                         │
+  │                         │                         │ GPU path:
+  │                         │                         │  tae_scan_task → pread →
+  │                         │                         │  pinned host memory →
+  │                         │                         │  cudaMemcpy to GPU →
+  │                         │                         │  nvCOMP LZ4 decompress →
+  │                         │                         │  CUDA decode kernels →
+  │                         │                         │  cudf filter pushdown →
+  │                         │                         │  Sirius GPU engine
+  │                         │                         │
   │                         │  JSONCompact response   │
   │                         │<────────────────────────│
   │  MySQL result set       │                         │
@@ -254,7 +284,12 @@ mo-sirius-sidecar/
 ├── httpserver/                ← HTTP query server (submodule)
 │   └── src/                   ← Server, serializers
 ├── sirius/                    ← GPU SQL engine (submodule)
-│   └── src/                   ← GPU operators, cuCascade
+│   └── src/
+│       ├── op/scan/           ← tae_scan_task (GPU native TAE reader)
+│       ├── data/              ← host_tae→gpu_table converter (nvCOMP + CUDA)
+│       ├── cuda/tae/          ← CUDA kernels (fixed decode, varchar, null mask)
+│       ├── tae/               ← TAE metadata parser
+│       └── ...                ← GPU operators, cuCascade, planner
 ├── extension_config.cmake     ← CPU extensions config
 ├── extension_config_gpu.cmake ← GPU extensions config
 ├── Makefile                   ← Build wrapper
