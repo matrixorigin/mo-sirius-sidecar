@@ -1,6 +1,7 @@
 build/
 cmake-build-*/
 compile_commands.json
+log/
 
 *.o
 *.a

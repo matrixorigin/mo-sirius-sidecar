@@ -1,9 +1,10 @@
 # mo-sirius-sidecar
 
 DuckDB-based query sidecar for MatrixOne, powered by the
-[Sirius](https://github.com/matrixorigin/sirius) GPU execution engine.
-Queries annotated with `/*+ SIDECAR */` (CPU) or `/*+ SIDECAR GPU */` (GPU) in MO are rewritten and forwarded to this
-sidecar, which reads TAE storage objects directly and returns results via HTTP.
+[Sirius](https://github.com/sirius-db/sirius) GPU execution engine.
+[MatrixOne](https://github.com/matrixorigin/matrixone) rewrites and forwards queries annotated with `/*+ SIDECAR */` (DuckDB on CPU) or `/*+ SIDECAR GPU */` (SiriusDB on GPU) to this sidecar to take advantage of GPU for analytic query processing.  
+
+MatrixOne distinguishes itself from other SiriusDB integrations through its fundamental architecture as a Hybrid Transactional/Analytical Processing (HTAP) system. This dual-capability framework allows MatrixOne to consistently maintain high-throughput transactional performance, executing tens of thousands of transactions per second on modest CPU configurations. By integrating with SiriusDB, the system facilitates the offloading of complex analytical workloads to high-performance GPUs. This synergy enables the processing of near-instantaneous, transaction-consistent data, effectively bridging the gap between real-time operational state and deep computational analysis without the latency typically associated with traditional data movement.
 
 ## Execution Paths
 
@@ -12,7 +13,7 @@ sidecar, which reads TAE storage objects directly and returns results via HTTP.
 | **CPU** | `/*+ SIDECAR */` | DuckDB vectorized | `tae_scan()` → pread → LZ4 (CPU) → DuckDB vectors |
 | **GPU** | `/*+ SIDECAR GPU */` | Sirius + cuDF | `tae_scan_task` → pread → pinned host → cudaMemcpy → nvCOMP LZ4 (GPU) → CUDA decode → cudf tables |
 
-The GPU path bypasses DuckDB vectors entirely — compressed TAE data goes directly from
+The GPU path bypasses DuckDB execution engine entirely — compressed TAE data goes directly from
 disk to GPU memory, with decompression and column decoding performed by CUDA kernels.
 Filter predicates are pushed down and evaluated on GPU via `cudf::compute_column()`.
 See [DESIGN.md §13](DESIGN.md#13-gpu-native-tae-scan-sirius) for full architecture.
@@ -22,7 +23,7 @@ See [DESIGN.md §13](DESIGN.md#13-gpu-native-tae-scan-sirius) for full architect
 | Extension | Source | Description |
 |-----------|--------|-------------|
 | **tae-scanner** | [duckdb-tae-scanner](https://github.com/matrixorigin/duckdb-tae-scanner) | Reads MatrixOne TAE storage objects as DuckDB table functions |
-| **httpserver** | [duckdb-httpserver](https://github.com/matrixorigin/duckdb-httpserver) | ClickHouse-compatible HTTP server for accepting SQL queries |
+| **httpserver** | [duckdb-httpserver](https://github.com/matrixorigin/duckdb-httpserver) | DuckDB HTTP server for accepting SQL queries |
 | **sirius** | [sirius](https://github.com/matrixorigin/sirius) | GPU-accelerated SQL execution via cuCascade/cuDF |
 
 Extensions are statically linked into the DuckDB binary — no manual `LOAD` needed.
@@ -35,7 +36,7 @@ libraries.
 
 **Debian / Ubuntu:**
 ```bash
-sudo apt install clang cmake ninja-build liblz4-dev libssl-dev git
+sudo apt install clang cmake ninja-build liblz4-dev libssl-dev git libcurl4-openssl-dev
 ```
 
 **Fedora / RHEL / Rocky:**
@@ -174,13 +175,15 @@ curl 'http://localhost:9876/?default_format=JSONCompact&query=SELECT+42'
 
 ## MatrixOne integration
 
+
 ### 1. Start the sidecar
 
 Start the CPU or GPU sidecar on port 9876 (see [Deploy](#deploy) above).
 
 ### 2. Start MatrixOne
 
-MO must be started with the `-debug-http` flag — this enables the internal
+MatrixOne has integrated SiriusDB sidecar.  At this moment, MO must be started with 
+the `-debug-http` flag — this enables the internal
 `/debug/tae/manifest` endpoint that the sidecar uses to discover TAE objects:
 
 ```bash
@@ -205,11 +208,7 @@ SET sidecar_url = 'http://localhost:9876';
 
 ### 4. Run queries
 
-Use `--comments` when connecting via mariadb so SQL hints are preserved:
-
-```bash
-mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
-```
+TPCH dataset can be loaded from [mo-tpch](https://github.com/matrixorigin/mo-tpch).
 
 ```sql
 -- CPU sidecar (DuckDB vectorized engine):
@@ -221,6 +220,14 @@ mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
 
 If the sidecar is not configured or not reachable, MO silently falls back to
 native execution (the hint is stripped).
+
+NOTE: MatrixOne use a mysql compatible client protocol.  User can use any mysql client
+to connect to MatrixOne and run queries.  If using the `mariadb` client, user need to 
+use `--comments` so that SQL hints are preserved:
+
+```bash
+mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
+```
 
 ### Known issues
 
