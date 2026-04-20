@@ -125,7 +125,7 @@ This adds the Sirius GPU execution engine on top of tae_scanner + httpserver.
 ```bash
 DUCKDB_HTTPSERVER_FOREGROUND=1 \
 DUCKDB_HTTPSERVER_PORT=9876 \
-  ./build/release/duckdb -unsigned
+  ./build/release/duckdb
 ```
 
 The HTTP server auto-starts on the specified port.
@@ -143,7 +143,7 @@ cd sirius && pixi run -- bash -c "
   DUCKDB_HTTPSERVER_FOREGROUND=1 \
   DUCKDB_HTTPSERVER_PORT=9876 \
   SIRIUS_LOG_LEVEL=info \
-    ./build/release-gpu/duckdb -unsigned
+    ./build/release-gpu/duckdb
 "
 ```
 
@@ -162,7 +162,7 @@ Set `SIRIUS_LOG_LEVEL=debug` for verbose GPU execution logs (very noisy).
 ### Manual start (interactive)
 
 ```bash
-./build/release/duckdb -unsigned \
+./build/release/duckdb \
   -cmd "SELECT httpserve_start('0.0.0.0', 9876, '')"
 ```
 
