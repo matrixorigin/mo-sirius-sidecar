@@ -1,21 +1,39 @@
 # mo-sirius-sidecar
 
 DuckDB-based query sidecar for MatrixOne, powered by the
-[Sirius](https://github.com/sirius-db/sirius) GPU execution engine.
-[MatrixOne](https://github.com/matrixorigin/matrixone) rewrites and forwards queries annotated with `/*+ SIDECAR */` (DuckDB on CPU) or `/*+ SIDECAR GPU */` (SiriusDB on GPU) to this sidecar to take advantage of GPU for analytic query processing.  
+[Sirius](https://github.com/matrixorigin/sirius) GPU execution engine.
+[MatrixOne](https://github.com/matrixorigin/matrixone) rewrites and forwards
+queries annotated with `/*+ SIDECAR */` (DuckDB on CPU) or
+`/*+ SIDECAR GPU */` (SiriusDB on GPU) to this sidecar to take advantage of GPU
+for analytic query processing.
 
-MatrixOne distinguishes itself from other SiriusDB integrations through its fundamental architecture as a Hybrid Transactional/Analytical Processing (HTAP) system. This dual-capability framework allows MatrixOne to consistently maintain high-throughput transactional performance, executing tens of thousands of transactions per second on modest CPU configurations. By integrating with SiriusDB, the system facilitates the offloading of complex analytical workloads to high-performance GPUs. This synergy enables the processing of near-instantaneous, transaction-consistent data, effectively bridging the gap between real-time operational state and deep computational analysis without the latency typically associated with traditional data movement.
+MatrixOne distinguishes itself from other SiriusDB integrations through its
+fundamental architecture as a Hybrid Transactional/Analytical Processing (HTAP)
+system. This dual-capability framework allows MatrixOne to consistently maintain
+high-throughput transactional performance, executing tens of thousands of
+transactions per second on modest CPU configurations. By integrating with
+SiriusDB, the system facilitates the offloading of complex analytical workloads
+to high-performance GPUs. This synergy enables the processing of
+near-instantaneous, transaction-consistent data, effectively bridging the gap
+between real-time operational state and deep computational analysis without the
+latency typically associated with traditional data movement.
 
 ## Execution Paths
 
 | Path | Hint | Engine | Scan Pipeline |
 |------|------|--------|---------------|
 | **CPU** | `/*+ SIDECAR */` | DuckDB vectorized | `tae_scan()` → pread → LZ4 (CPU) → DuckDB vectors |
-| **GPU** | `/*+ SIDECAR GPU */` | Sirius + cuDF | `tae_scan_task` → pread → pinned host → cudaMemcpy → nvCOMP LZ4 (GPU) → CUDA decode → cudf tables |
+| **GPU** | `/*+ SIDECAR GPU */` | Sirius + cuDF | `tae_scan_task` → coalesced pread → pinned host → cudaMemcpy → nvCOMP LZ4 (GPU) → CUDA decode → cudf tables |
 
-The GPU path bypasses DuckDB execution engine entirely — compressed TAE data goes directly from
-disk to GPU memory, with decompression and column decoding performed by CUDA kernels.
-Filter predicates are pushed down and evaluated on GPU via `cudf::compute_column()`.
+Both paths apply object-level and block-level zone-map pruning to skip data that
+cannot match filter predicates. The GPU path uses coalesced I/O to merge adjacent
+reads into single `pread()` calls (e.g., 360 reads → 12 I/O calls for a 5-column
+scan), and CRC stripping is performed in memory when reading local MO files.
+
+The GPU path bypasses the DuckDB execution engine entirely — compressed TAE data
+goes directly from disk to GPU memory, with decompression and column decoding
+performed by CUDA kernels. Filter predicates are pushed down and evaluated on GPU
+via `cudf::compute_column()`.
 See [DESIGN.md §13](DESIGN.md#13-gpu-native-tae-scan-sirius) for full architecture.
 
 ## Extensions
@@ -182,7 +200,7 @@ Start the CPU or GPU sidecar on port 9876 (see [Deploy](#deploy) above).
 
 ### 2. Start MatrixOne
 
-MatrixOne has integrated SiriusDB sidecar.  At this moment, MO must be started with 
+MatrixOne supports SiriusDB sidecar offloading.  Currently MO must be started with
 the `-debug-http` flag — this enables the internal
 `/debug/tae/manifest` endpoint that the sidecar uses to discover TAE objects:
 
@@ -208,7 +226,7 @@ SET sidecar_url = 'http://localhost:9876';
 
 ### 4. Run queries
 
-TPCH dataset can be loaded from [mo-tpch](https://github.com/matrixorigin/mo-tpch).
+TPC-H dataset can be loaded from [mo-tpch](https://github.com/matrixorigin/mo-tpch).
 
 ```sql
 -- CPU sidecar (DuckDB vectorized engine):
@@ -221,9 +239,9 @@ TPCH dataset can be loaded from [mo-tpch](https://github.com/matrixorigin/mo-tpc
 If the sidecar is not configured or not reachable, MO silently falls back to
 native execution (the hint is stripped).
 
-NOTE: MatrixOne use a mysql compatible client protocol.  User can use any mysql client
-to connect to MatrixOne and run queries.  If using the `mariadb` client, user need to 
-use `--comments` so that SQL hints are preserved:
+NOTE: MatrixOne uses a MySQL-compatible client protocol.  Any MySQL client can connect
+to MatrixOne and run queries.  If using the `mariadb` client, add `--comments` so that
+SQL hints are preserved:
 
 ```bash
 mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
@@ -245,7 +263,7 @@ mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
 ```
 Client                  MatrixOne                Sidecar (DuckDB + Sirius)
   │                         │                         │
-  │  /*+ SIDECAR [GPU] */ ...  │                         │
+  │ /*+ SIDECAR [GPU] */    │                         │
   │────────────────────────>│                         │
   │                         │  GET /debug/tae/manifest│
   │                         │  (internal, for schema) │
@@ -283,7 +301,7 @@ Client                  MatrixOne                Sidecar (DuckDB + Sirius)
 
 ```
 mo-sirius-sidecar/
-├── duckdb/                    ← DuckDB v1.5.1 (submodule)
+├── duckdb/                    ← DuckDB v1.5.2 (submodule)
 ├── extension-ci-tools/        ← DuckDB build helpers (submodule)
 ├── tae-scanner/               ← TAE storage reader (submodule)
 │   ├── src/                   ← Scanner, filter, object reader

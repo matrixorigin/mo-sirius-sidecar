@@ -1038,22 +1038,26 @@ to GPU memory, with decompression and decoding performed entirely on the GPU.
 │           tae_scan_task            │          │            GPU Pipeline              │
 │                                    │          │                                      │
 │  1. Parse TAE metadata             │          │                                      │
-│  2. pread() column data            │   H2D    │  4. nvCOMP LZ4 batch decompress      │
-│  3. CRC-strip into pinned host    ─┼─────────►│                                      │
-│     memory (data stays compressed) │  async   │  5. CUDA decode kernels:             │
-│                                    │          │     • fixed-width (strip header,     │
-│  host_tae_representation           │          │       epoch adjust DATE/TIMESTAMP)   │
-│  ┌──────────────────────────────┐  │          │     • varchar (varlena → cudf        │
-│  │ col_chunk[0]: compressed     │  │          │       offsets + chars via CUB)       │
-│  │ col_chunk[1]: compressed     │  │          │     • null mask XOR inversion        │
-│  │ col_chunk[2]: compressed     │  │          │                                      │
-│  │ ...                          │  │          │  6. cudf::compute_column()           │
-│  │ filter_expression            │  │          │     (evaluate filter predicates)     │
-│  │ post_filter_projection_ids   │  │          │                                      │
-│  └──────────────────────────────┘  │          │  7. cudf::apply_boolean_mask()       │
-│                                    │          │     (prune filtered rows)            │
-└────────────────────────────────────┘          │                                      │
-                                                │  8. Post-filter column projection    │
+│  2. Object-level zone-map pruning  │          │                                      │
+│     (skip objects that cannot      │          │                                      │
+│      match filter predicates)      │          │                                      │
+│  3. Block-level zone-map pruning   │          │                                      │
+│  4. Coalesced pread() — merge      │   H2D    │  6. nvCOMP LZ4 batch decompress      │
+│     adjacent reads into single     │          │                                      │
+│     I/O calls (cap: 32 per group)  │          │  7. CUDA decode kernels:             │
+│  5. CRC-strip into pinned host    ─┼─────────►│     • fixed-width (strip header,     │
+│     memory (data stays compressed) │  async   │       epoch adjust DATE/TIMESTAMP)   │
+│                                    │          │     • varchar (varlena → cudf        │
+│  host_tae_representation           │          │       offsets + chars via CUB)       │
+│  ┌──────────────────────────────┐  │          │     • null mask XOR inversion        │
+│  │ col_chunk[0]: compressed     │  │          │                                      │
+│  │ col_chunk[1]: compressed     │  │          │  8. cudf::compute_column()           │
+│  │ col_chunk[2]: compressed     │  │          │     (evaluate filter predicates)     │
+│  │ ...                          │  │          │                                      │
+│  │ filter_expression            │  │          │  9. cudf::apply_boolean_mask()       │
+│  │ post_filter_projection_ids   │  │          │     (prune filtered rows)            │
+│  └──────────────────────────────┘  │          │                                      │
+└────────────────────────────────────┘          │ 10. Post-filter column projection    │
                                                 │     (remove filter-only columns)     │
                                                 │                                      │
                                                 │          cudf::table                 │
@@ -1071,7 +1075,7 @@ to GPU memory, with decompression and decoding performed entirely on the GPU.
 | File | Description |
 |------|-------------|
 | `src/op/sirius_physical_gpu_tae_scan.cpp` | Scan operator — translates DuckDB filter expressions to cudf AST (index-based column references) |
-| `src/op/scan/tae_scan_task.cpp` | Scan task — reads TAE metadata + compressed column data into pinned host memory with CRC stripping |
+| `src/op/scan/tae_scan_task.cpp` | Scan task — reads TAE metadata + compressed column data into pinned host memory with zone-map pruning, coalesced I/O, and CRC stripping |
 | `src/include/op/sirius_physical_gpu_tae_scan.hpp` | Scan operator header |
 | `src/include/op/scan/tae_scan_task.hpp` | Scan task header (global/local state classes) |
 
@@ -1141,7 +1145,35 @@ The filter is evaluated on GPU after decompression/decoding:
 2. `cudf::apply_boolean_mask(table, mask)` → filtered table
 3. Post-filter projection removes filter-only columns
 
-### 13.6 Performance Characteristics
+### 13.6 Scan Optimizations
+
+**Object-level zone-map pruning:**
+Before opening a file, the scan task checks the sort-key zone map from the manifest
+(`sort_key_zm` field, a 64-byte ZM encoding min/max for the sort column). If the
+pushed-down filter predicates cannot match the object's sort-key range, the entire
+object is skipped. This avoids disk I/O for objects that cannot contribute rows.
+Note: MO does not populate `zone_map` in manifests at SF10; this optimization
+becomes effective at larger scale factors where manifests include zone maps.
+
+**Block-level zone-map pruning:**
+After parsing object metadata, the scan task examines per-block zone maps for each
+filter column. Blocks whose zone map range is disjoint from the filter predicate are
+excluded from the read plan. This reduces the amount of data read and transferred to
+the GPU.
+
+**Coalesced I/O:**
+After sorting the read plan by file offset, adjacent reads are merged into single
+`pread()` calls. Groups are capped at `MAX_COALESCE_GROUP = 32` to bound temporary
+memory (~3.3 MB per group). For CRC-wrapped files (all local MO files use
+4-byte CRC prefix per 2048-byte physical block), the scan reads the physical range
+once and strips CRC headers in memory. For non-CRC files (e.g., S3 objects), the
+scan reads directly into the pinned buffer.
+
+Typical coalescing at SF10 (lineitem, 72 blocks × 5 columns):
+- COUNT(*): 72 reads → 3 I/O calls
+- Q1 (5 columns): 360 reads → 12 I/O calls
+
+### 13.7 Performance Characteristics
 
 **TPC-H SF10 on RTX 3070 (8 GB VRAM):**
 
@@ -1149,7 +1181,7 @@ The filter is evaluated on GPU after decompression/decoding:
 |--------------------|-------------------:|:-------------:|:------------------:|
 | Native MatrixOne   |          4,825 ms  |     219 ms    |        1.0×        |
 | CPU sidecar        |          3,463 ms  |     157 ms    |   **1.4× faster**  |
-| GPU TAE sidecar    |         11,134 ms  |     506 ms    |    0.4× (slower)   |
+| GPU TAE sidecar    |          9,135 ms  |     415 ms    |    0.5× (slower)   |
 
 At SF10, GPU overhead (host→GPU transfer, kernel launch latency) dominates because
 per-query data volumes are small (~100 MB compressed per query). The GPU path is
