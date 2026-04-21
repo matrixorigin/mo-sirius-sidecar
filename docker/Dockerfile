@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake && \
     rm -rf /var/lib/apt/lists/*
 
-ARG MO_REPO=https://github.com/aunjgr/matrixone.git
-ARG MO_BRANCH=sidecar-offload-fixes
+ARG MO_REPO=https://github.com/matrixorigin/matrixone.git
+ARG MO_BRANCH=main
 
 RUN git clone --depth 1 -b ${MO_BRANCH} ${MO_REPO} /mo
 WORKDIR /mo
@@ -97,8 +97,7 @@ COPY docker/etc/log.toml    /etc/launch/log.toml
 # Sidecar binary + pixi runtime libs + Sirius config
 COPY --from=sidecar-builder /sidecar/build/release-gpu/duckdb /sidecar/duckdb
 COPY --from=sidecar-builder /sidecar-runtime-libs/ /usr/local/lib/
-COPY sirius.yaml /etc/sidecar/sirius.yaml
-ENV SIRIUS_CONFIG_FILE=/etc/sidecar/sirius.yaml
+COPY sirius.yaml.example /etc/sidecar/sirius.yaml
 
 RUN ldconfig
 

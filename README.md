@@ -167,6 +167,54 @@ cd sirius && pixi run -- bash -c "
 
 Set `SIRIUS_LOG_LEVEL=debug` for verbose GPU execution logs (very noisy).
 
+### Docker
+
+A combined MO + GPU sidecar image is defined in `docker/Dockerfile`:
+
+```bash
+docker build -t mo-sirius:latest -f docker/Dockerfile \
+  --build-arg MO_REPO=https://github.com/matrixorigin/matrixone.git \
+  --build-arg MO_BRANCH=main \
+  .
+
+docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 mo-sirius:latest
+```
+
+**Runtime configuration overrides.** The image ships a default
+`sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at
+`/etc/launch/*.toml`. Any of them can be overridden without rebuilding
+the image:
+
+- **Bind-mount a replacement file** — the simplest approach:
+
+  ```bash
+  docker run --gpus all -p 6001:6001 -p 9999:9999 \
+    -v /host/path/sirius.yaml:/etc/sidecar/sirius.yaml:ro \
+    -v /host/configs/launch.toml:/etc/launch/launch.toml:ro \
+    mo-sirius:latest
+  ```
+
+- **Point `SIRIUS_CONFIG_FILE` at a custom path:**
+
+  ```bash
+  docker run --gpus all ... \
+    -v /host/configs:/custom:ro \
+    -e SIRIUS_CONFIG_FILE=/custom/my-sirius.yaml \
+    mo-sirius:latest
+  ```
+
+- **Tune knobs via environment variables** (see table below) — all
+  `SIRIUS_*`, `DUCKDB_HTTPSERVER_*`, `MO_DEBUG_HTTP`, and
+  `MO_LAUNCH_CONF` are passed through:
+
+  ```bash
+  docker run --gpus all ... \
+    -e SIRIUS_TAE_BASELINE_COLS=6 \
+    -e SIRIUS_LOG_LEVEL=info \
+    -e DUCKDB_HTTPSERVER_AUTH=my-secret-token \
+    mo-sirius:latest
+  ```
+
 ### Environment variables
 
 | Variable | Default | Description |
