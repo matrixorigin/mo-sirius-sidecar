@@ -1173,6 +1173,24 @@ Typical coalescing at SF10 (lineitem, 72 blocks × 5 columns):
 - COUNT(*): 72 reads → 3 I/O calls
 - Q1 (5 columns): 360 reads → 12 I/O calls
 
+**Multi-object batching:**
+The task creator claims multiple partitions per scan task (up to a byte cap derived
+from `scan_task_batch_size`) so a single nvCOMP LZ4 call decompresses more chunks in
+parallel, improving SM utilization and LZ4 throughput.
+
+**Adaptive batch size by projection width:**
+Wider projections produce more nvCOMP chunks and more decode/filter work per object,
+so oversized batches create GPU tail latency. The effective byte cap scales inversely
+with projected column count:
+```
+effective_cap = scan_task_batch_size × SIRIUS_TAE_BASELINE_COLS / proj_cols
+              (floored at 32 MB)
+```
+Default baseline is 4 — narrow projections (≤4 cols) see the configured cap unchanged,
+7-col queries get ~91 MB, 16-col queries get ~40 MB. `SIRIUS_TAE_BASELINE_COLS=0`
+disables scaling. At TPC-H SF10 this saves ~2% end-to-end, mostly on wide-projection
+queries (Q10, Q14, Q17, Q18).
+
 ### 13.7 Performance Characteristics
 
 **TPC-H SF10 on RTX 3070 (8 GB VRAM):**

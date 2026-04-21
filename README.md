@@ -176,6 +176,7 @@ Set `SIRIUS_LOG_LEVEL=debug` for verbose GPU execution logs (very noisy).
 | `DUCKDB_HTTPSERVER_AUTH` | *(empty)* | Auth token (X-API-Key or Basic auth) |
 | `DUCKDB_HTTPSERVER_FOREGROUND` | `0` | Set to `1` to block after startup (daemon mode) |
 | `SIRIUS_LOG_LEVEL` | `warn` | Sirius GPU engine log level (`info`, `debug`, `trace`) |
+| `SIRIUS_TAE_BASELINE_COLS` | `4` | GPU TAE scan: projected-col count at which `scan_task_batch_size` is used as-is. Effective cap scales as `scan_task_batch_size × baseline / proj_cols` (floored at 32MB); wider projections get smaller per-task batches to reduce GPU tail latency. `0` disables scaling. |
 
 ### Manual start (interactive)
 
