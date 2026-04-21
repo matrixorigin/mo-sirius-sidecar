@@ -30,7 +30,7 @@ SIDECAR_PID=$!
 SIDECAR_URL="http://127.0.0.1:${DUCKDB_HTTPSERVER_PORT}"
 echo "[entrypoint] Waiting for sidecar to be ready ..."
 for i in $(seq 1 30); do
-    if curl -sf "${SIDECAR_URL}/ping" >/dev/null 2>&1; then
+    if curl -sf --noproxy '*' "${SIDECAR_URL}/ping" >/dev/null 2>&1; then
         echo "[entrypoint] Sidecar ready."
         break
     fi
@@ -41,7 +41,7 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-if ! curl -sf "${SIDECAR_URL}/ping" >/dev/null 2>&1; then
+if ! curl -sf --noproxy '*' "${SIDECAR_URL}/ping" >/dev/null 2>&1; then
     echo "[entrypoint] ERROR: Sidecar did not become ready within 30 seconds."
     exit 1
 fi
