@@ -147,8 +147,15 @@ DUCKDB_HTTPSERVER_PORT=9876 \
 ```
 
 The HTTP server auto-starts on the specified port.
-`DUCKDB_HTTPSERVER_FOREGROUND=1` keeps the process running as a daemon (blocks
-after startup instead of dropping to the interactive shell).
+`DUCKDB_HTTPSERVER_FOREGROUND=1` keeps the process running after the DuckDB
+shell's REPL ends (blocks on an atexit handler), so you can run it as a daemon.
+Send `SIGINT` to shut down gracefully. When backgrounding without a TTY,
+redirect stdin to avoid `SIGTTIN`:
+
+```bash
+DUCKDB_HTTPSERVER_FOREGROUND=1 DUCKDB_HTTPSERVER_PORT=9876 \
+  ./build/release/duckdb < /dev/null > sidecar.log 2>&1 &
+```
 
 ### GPU sidecar
 
