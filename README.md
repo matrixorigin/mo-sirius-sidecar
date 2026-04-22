@@ -187,6 +187,24 @@ docker build -t mo-sirius:latest -f docker/Dockerfile \
 docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 mo-sirius:latest
 ```
 
+**Persisting MatrixOne data (`mo-data`).** The bundled MO configs use
+`data-dir = "./mo-data"` and the entrypoint runs from `/`, so MO writes
+its catalog, logs, and TAE objects to `/mo-data/` inside the container.
+The image declares no `VOLUME`, so without a bind-mount this directory
+lives in the container's writable layer and is **lost when the container
+is removed**. To persist (or pre-load) data, mount a host directory:
+
+```bash
+mkdir -p $(pwd)/mo-data
+docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
+  -v $(pwd)/mo-data:/mo-data \
+  mo-sirius:latest
+```
+
+This follows the same convention as upstream MatrixOne's
+`etc/docker-multi-cn-local-disk/docker-compose.yml`, which mounts
+`../../mo-data:/mo-data` for every CN/TN service.
+
 **Runtime configuration overrides.** The image ships a default
 `sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at
 `/etc/launch/*.toml`. Any of them can be overridden without rebuilding
