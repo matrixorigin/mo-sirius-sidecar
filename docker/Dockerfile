@@ -108,8 +108,16 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 curl tini mariadb-client-core && \
+        libgomp1 curl tini bc python3 mariadb-client-core && \
+    ln -sf /usr/bin/python3 /usr/local/bin/python && \
     rm -rf /var/lib/apt/lists/*
+
+# Ensure intra-container HTTP traffic (sidecar <-> MO debug-http) bypasses any
+# proxy inherited from the host. Without this, sidecar's HTTP HEAD to
+# http://localhost:8888/debug/tae/manifest gets routed through http_proxy and
+# fails with "Server returned nothing".
+ENV no_proxy=localhost,127.0.0.1,::1 \
+    NO_PROXY=localhost,127.0.0.1,::1
 
 # MO binary
 COPY --from=mo-builder /mo/mo-service /mo-service

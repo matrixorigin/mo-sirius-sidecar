@@ -22,3 +22,5 @@ venv/
 
 .DS_Store
 Thumbs.db
+test-mo-data/
+tpch-data/

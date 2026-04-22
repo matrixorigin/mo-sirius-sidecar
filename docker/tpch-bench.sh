@@ -7,10 +7,16 @@
 #   LOAD  — LOAD DATA INFILE all tables  (skip with LOAD=0)
 #   QUERY — run all 22 queries           (skip with QUERY=0)
 #
+# Engine selection (which executor MO uses for queries):
+#   ENGINE=native — MO native execution, no hint   (default)
+#   ENGINE=cpu    — prepend /*+ SIDECAR */ to each query
+#   ENGINE=gpu    — prepend /*+ SIDECAR GPU */ to each query
+#
 # Usage:
-#   tpch-bench [SF]                      # default SF=1
+#   tpch-bench [SF]                        # default SF=1
 #   SF=10 tpch-bench
-#   GEN=0 LOAD=0 tpch-bench 10           # skip data prep, just run queries
+#   ENGINE=gpu tpch-bench 10               # all 22 queries on GPU sidecar
+#   GEN=0 LOAD=0 ENGINE=gpu tpch-bench 10  # reuse data, queries only
 #
 # Env overrides:
 #   MO_HOST (127.0.0.1)  MO_PORT (6001)
@@ -34,9 +40,18 @@ GEN="${GEN:-1}"
 CTAB="${CTAB:-1}"
 LOAD="${LOAD:-1}"
 QUERY="${QUERY:-1}"
+ENGINE="${ENGINE:-native}"
 
 WORKSPACE=/opt/mo-tpch
 DATA_DIR="${DATA_DIR:-${WORKSPACE}/data/${SF}}"
+
+case "${ENGINE}" in
+    native) HINT="" ;;
+    cpu)    HINT="/*+ SIDECAR */" ;;
+    gpu)    HINT="/*+ SIDECAR GPU */" ;;
+    *)      echo "[tpch-bench] ERROR: ENGINE must be native|cpu|gpu (got '${ENGINE}')" >&2; exit 2 ;;
+esac
+export HINT
 
 cd "${WORKSPACE}"
 
@@ -64,7 +79,7 @@ if [[ "${LOAD}" == "1" ]]; then
 fi
 
 if [[ "${QUERY}" == "1" ]]; then
-    echo "[tpch-bench] QUERY all SF=${SF}"
+    echo "[tpch-bench] QUERY all SF=${SF} ENGINE=${ENGINE}"
     bash run.sh -q all "${RUN_ARGS[@]}"
 fi
 

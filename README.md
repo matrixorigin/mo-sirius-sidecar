@@ -209,13 +209,17 @@ This follows the same convention as upstream MatrixOne's
 [`mo-tpch`](https://github.com/matrixorigin/mo-tpch) at `/opt/mo-tpch`
 with a pre-built `dbgen`, the schema (`mo.ddl`), all 22 queries, and
 golden answers. A convenience wrapper `tpch-bench` runs the full
-generate → create-tables → load → query pipeline:
+generate → create-tables → load → query pipeline, with an `ENGINE`
+switch to route queries through MO native, the CPU sidecar, or the
+GPU sidecar:
 
 ```bash
 # inside the running container (or via docker exec):
-tpch-bench 1                          # SF=1, all phases
+tpch-bench 1                          # SF=1, all phases, ENGINE=native (default)
 SF=10 tpch-bench                      # SF=10
 GEN=0 LOAD=0 tpch-bench 10            # SF=10, queries only
+ENGINE=cpu  GEN=0 LOAD=0 tpch-bench 10   # route via CPU sidecar (/*+ SIDECAR */)
+ENGINE=gpu  GEN=0 LOAD=0 tpch-bench 10   # route via GPU sidecar (/*+ SIDECAR GPU */)
 
 # override MO connection or data location:
 MO_HOST=mo MO_PORT=6001 tpch-bench 1
@@ -234,10 +238,10 @@ docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
   mo-sirius:latest
 ```
 
-To use the GPU sidecar for query execution, prefix the queries in
-`/opt/mo-tpch/queries/` with `/*+ SIDECAR GPU */` after `SELECT`, or
-edit `mo-tpch/run.sh` upstream to inject the hint. The wrapper itself
-stays neutral.
+`ENGINE=cpu|gpu` injects the corresponding sidecar hint as the first
+line of every query before piping to `mariadb --comments`, so MO
+forwards the rewritten SQL to the in-container sidecar at
+`http://127.0.0.1:9999`.
 
 **Runtime configuration overrides.** The image ships a default
 `sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at

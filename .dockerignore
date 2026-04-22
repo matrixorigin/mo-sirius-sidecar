@@ -2,3 +2,20 @@ build/
 sirius/.pixi/
 *.o
 *.a
+
+# Local data dirs (created by container bind mounts) — must never enter the build context
+test-mo-data/
+tpch-data/
+mo-data/
+
+# Local artifacts not needed for the build
+mo-sirius.tar.zst
+log/
+*.log
+msg.txt
+sirius.yaml
+sirius.yaml.bak
+
+# Editor / VCS noise
+.cache/
+.github/
