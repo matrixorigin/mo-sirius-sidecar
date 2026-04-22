@@ -205,6 +205,40 @@ This follows the same convention as upstream MatrixOne's
 `etc/docker-multi-cn-local-disk/docker-compose.yml`, which mounts
 `../../mo-data:/mo-data` for every CN/TN service.
 
+**Running TPC-H benchmarks.** The image bundles
+[`mo-tpch`](https://github.com/matrixorigin/mo-tpch) at `/opt/mo-tpch`
+with a pre-built `dbgen`, the schema (`mo.ddl`), all 22 queries, and
+golden answers. A convenience wrapper `tpch-bench` runs the full
+generate → create-tables → load → query pipeline:
+
+```bash
+# inside the running container (or via docker exec):
+tpch-bench 1                          # SF=1, all phases
+SF=10 tpch-bench                      # SF=10
+GEN=0 LOAD=0 tpch-bench 10            # SF=10, queries only
+
+# override MO connection or data location:
+MO_HOST=mo MO_PORT=6001 tpch-bench 1
+DATA_DIR=/data/sf10 tpch-bench 10     # bind-mount /data for large SFs
+```
+
+For SF ≥ 10, mount a host volume at `/opt/mo-tpch/data` (or set
+`DATA_DIR`) so the generated `.tbl` files don't fill the container's
+writable layer:
+
+```bash
+mkdir -p $(pwd)/tpch-data
+docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
+  -v $(pwd)/mo-data:/mo-data \
+  -v $(pwd)/tpch-data:/opt/mo-tpch/data \
+  mo-sirius:latest
+```
+
+To use the GPU sidecar for query execution, prefix the queries in
+`/opt/mo-tpch/queries/` with `/*+ SIDECAR GPU */` after `SELECT`, or
+edit `mo-tpch/run.sh` upstream to inject the hint. The wrapper itself
+stays neutral.
+
 **Runtime configuration overrides.** The image ships a default
 `sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at
 `/etc/launch/*.toml`. Any of them can be overridden without rebuilding
