@@ -2,7 +2,7 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 
 [malloc]
 check-fraction = 65536
