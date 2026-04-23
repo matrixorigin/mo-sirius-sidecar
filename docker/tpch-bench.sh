@@ -78,6 +78,19 @@ if [[ "${LOAD}" == "1" ]]; then
     bash run.sh -l -f "${DATA_DIR}" "${RUN_ARGS[@]}"
 fi
 
+# After LOAD, ask MO to flush each TPC-H table from the in-memory partition
+# state to TAE objects so the sidecar can see freshly-loaded data immediately.
+# Without this, the first sidecar query right after LOAD often hits
+# "Cannot open file /mo-data/shared/<uuid>: No such file or directory".
+if [[ "${LOAD}" == "1" && "${QUERY}" == "1" && "${ENGINE}" != "native" ]]; then
+    DBNAME="tpch_${SF}g"
+    echo "[tpch-bench] FLUSH ${DBNAME} (mo_ctl flush per table)"
+    for tbl in nation region part supplier partsupp customer orders lineitem; do
+        mariadb --skip-ssl -h"${MO_HOST}" -P"${MO_PORT}" -u"${MO_USER}" -p"${MO_PASS}" \
+            -e "select mo_ctl('dn', 'flush', '${DBNAME}.${tbl}');" >/dev/null
+    done
+fi
+
 if [[ "${QUERY}" == "1" ]]; then
     echo "[tpch-bench] QUERY all SF=${SF} ENGINE=${ENGINE}"
     bash run.sh -q all "${RUN_ARGS[@]}"

@@ -38,8 +38,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ARG MO_REPO=https://github.com/matrixorigin/matrixone.git
 ARG MO_BRANCH=main
+ARG MO_REF=
 
-RUN git clone --depth 1 -b ${MO_BRANCH} ${MO_REPO} /mo
+RUN git clone -b ${MO_BRANCH} ${MO_REPO} /mo && \
+    if [ -n "${MO_REF}" ]; then git -C /mo checkout ${MO_REF}; fi
 WORKDIR /mo
 RUN go mod download && make clean && make build && strip mo-service
 
@@ -53,8 +55,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates curl libnuma-dev binutils && \
     rm -rf /var/lib/apt/lists/*
 
-# Install pixi
-RUN curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.59.0 bash
+# Install pixi (unpinned: install.sh fetches the latest release)
+RUN curl -fsSL https://pixi.sh/install.sh | bash
 ENV PATH="/root/.pixi/bin:${PATH}"
 
 WORKDIR /sidecar
