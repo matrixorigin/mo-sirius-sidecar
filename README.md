@@ -183,27 +183,30 @@ docker build -t mo-sirius:latest -f docker/Dockerfile \
   --build-arg MO_REPO=https://github.com/matrixorigin/matrixone.git \
   --build-arg MO_BRANCH=main \
   .
-
-docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 mo-sirius:latest
 ```
 
-**Persisting MatrixOne data (`mo-data`).** The bundled MO configs use
-`data-dir = "./mo-data"` and the entrypoint runs from `/`, so MO writes
-its catalog, logs, and TAE objects to `/mo-data/` inside the container.
-The image declares no `VOLUME`, so without a bind-mount this directory
-lives in the container's writable layer and is **lost when the container
-is removed**. To persist (or pre-load) data, mount a host directory:
+A typical run with all three bind-mounts (data, TPC-H scratch, logs):
 
 ```bash
-mkdir -p $(pwd)/mo-data
+mkdir -p $(pwd)/{mo-data,tpch-data,log}
 docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
   -v $(pwd)/mo-data:/mo-data \
+  -v $(pwd)/tpch-data:/opt/mo-tpch/data \
+  -v $(pwd)/log:/log \
   mo-sirius:latest
 ```
 
-This follows the same convention as upstream MatrixOne's
-`etc/docker-multi-cn-local-disk/docker-compose.yml`, which mounts
-`../../mo-data:/mo-data` for every CN/TN service.
+What each mount is for:
+
+- **`/mo-data`** — MO catalog, logs, and TAE objects. The bundled MO
+  configs use `data-dir = "./mo-data"` and the entrypoint runs from
+  `/`. Without this mount the data lives in the container's writable
+  layer and is **lost when the container is removed**. Same convention
+  as upstream's `etc/docker-multi-cn-local-disk/docker-compose.yml`.
+- **`/opt/mo-tpch/data`** — TPC-H `dbgen` output. Required for SF ≥ 10
+  to keep multi-GB `.tbl` files out of the writable layer. Set
+  `DATA_DIR` env to override.
+- **`/log`** — see "Container logs" below.
 
 **Running TPC-H benchmarks.** The image bundles
 [`mo-tpch`](https://github.com/matrixorigin/mo-tpch) at `/opt/mo-tpch`
@@ -226,22 +229,30 @@ MO_HOST=mo MO_PORT=6001 tpch-bench 1
 DATA_DIR=/data/sf10 tpch-bench 10     # bind-mount /data for large SFs
 ```
 
-For SF ≥ 10, mount a host volume at `/opt/mo-tpch/data` (or set
-`DATA_DIR`) so the generated `.tbl` files don't fill the container's
-writable layer:
-
-```bash
-mkdir -p $(pwd)/tpch-data
-docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
-  -v $(pwd)/mo-data:/mo-data \
-  -v $(pwd)/tpch-data:/opt/mo-tpch/data \
-  mo-sirius:latest
-```
-
 `ENGINE=cpu|gpu` injects the corresponding sidecar hint as the first
 line of every query before piping to `mariadb --comments`, so MO
 forwards the rewritten SQL to the in-container sidecar at
 `http://127.0.0.1:9999`.
+
+**Container logs.** MO and the sidecar run at debug level by default
+and would otherwise flood the host's syslog through the journald log
+driver. The entrypoint redirects them — and mo-tpch's
+`/opt/mo-tpch/report` and `run.log` — into files under `/log` inside
+the container:
+
+```text
+/log/
+├── mo-YYYYMMDD-HHMMSS.log       # mo-service stdout/stderr (per container start)
+├── sidecar-YYYYMMDD-HHMMSS.log  # DuckDB sidecar stdout/stderr (per container start)
+└── tpch/
+    └── YYYYMMDD-HHMMSS/         # one subdir per container start (symlinked
+        ├── run.log              #   from /opt/mo-tpch/{report,run.log})
+        └── TPCH_<SF>/q*.txt
+```
+
+Container stdout only carries `[entrypoint]` lifecycle messages.
+Bind-mount `/log` (see the run example above) to harvest everything
+on the host, or set `LOG_DIR` to a different in-container path.
 
 **Runtime configuration overrides.** The image ships a default
 `sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at

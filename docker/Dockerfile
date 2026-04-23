@@ -141,6 +141,17 @@ RUN ldconfig
 
 WORKDIR /
 
+# /log holds:
+#   - mo-<ts>.log + sidecar-<ts>.log (entrypoint.sh redirects MO and sidecar there)
+#   - tpch/<ts>/  -> mo-tpch's report dir (per-query result rows + run.log)
+# /opt/mo-tpch/{report,run.log} are recreated as symlinks into /log/tpch/<ts>/
+# by entrypoint.sh on each container start. Container stdout (captured by the
+# log driver) carries only [entrypoint] lifecycle messages. Bind-mount /log
+# (-v /host/path:/log) to see everything on the host; otherwise these files
+# live in the container's writable layer.
+RUN mkdir -p /log/tpch && \
+    rm -rf /opt/mo-tpch/report /opt/mo-tpch/run.log
+
 # MO ports: 6001 (SQL), 8888 (debug HTTP)
 # Sidecar ports: 9999 (DuckDB HTTP API)
 EXPOSE 6001 8888 9999
