@@ -73,9 +73,6 @@ sudo pacman -S clang cmake ninja lz4 openssl git
 git clone --recurse-submodules https://github.com/matrixorigin/mo-sirius-sidecar.git
 cd mo-sirius-sidecar
 
-# For GPU builds, also init sirius's internal deps:
-git -C sirius submodule update --init cucascade
-
 # Configure (first time only)
 cmake -S duckdb -B build/release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
@@ -138,63 +135,62 @@ This adds the Sirius GPU execution engine on top of tae_scanner + httpserver.
 
 ## Deploy
 
-### CPU sidecar
+Run the sidecar binary directly. The HTTP server auto-starts on the
+specified port; `DUCKDB_HTTPSERVER_FOREGROUND=1` blocks on an atexit
+handler so the process stays up after the DuckDB REPL ends. Send
+`SIGINT` to shut down gracefully.
 
 ```bash
-DUCKDB_HTTPSERVER_FOREGROUND=1 \
-DUCKDB_HTTPSERVER_PORT=9876 \
+# CPU sidecar
+DUCKDB_HTTPSERVER_FOREGROUND=1 DUCKDB_HTTPSERVER_PORT=9876 \
   ./build/release/duckdb
+
+# GPU sidecar (RPATH already points at sirius/.pixi/envs/default/lib —
+# no `pixi run` wrap needed on the host where it was built)
+DUCKDB_HTTPSERVER_FOREGROUND=1 DUCKDB_HTTPSERVER_PORT=9876 \
+SIRIUS_LOG_LEVEL=info \
+  ./build/release-gpu/duckdb
 ```
 
-The HTTP server auto-starts on the specified port.
-`DUCKDB_HTTPSERVER_FOREGROUND=1` keeps the process running after the DuckDB
-shell's REPL ends (blocks on an atexit handler), so you can run it as a daemon.
-Send `SIGINT` to shut down gracefully. When backgrounding without a TTY,
-redirect stdin to avoid `SIGTTIN`:
+When backgrounding without a TTY, redirect stdin to avoid `SIGTTIN`:
 
 ```bash
 DUCKDB_HTTPSERVER_FOREGROUND=1 DUCKDB_HTTPSERVER_PORT=9876 \
-  ./build/release/duckdb < /dev/null > sidecar.log 2>&1 &
-```
-
-### GPU sidecar
-
-The GPU build **must** run inside the pixi environment so that CUDA and cuDF
-runtime libraries are on `LD_LIBRARY_PATH`:
-
-```bash
-cd sirius && pixi run -- bash -c "
-  cd .. && \
-  DUCKDB_HTTPSERVER_FOREGROUND=1 \
-  DUCKDB_HTTPSERVER_PORT=9876 \
-  SIRIUS_LOG_LEVEL=info \
-    ./build/release-gpu/duckdb
-"
+  ./build/release-gpu/duckdb < /dev/null > sidecar.log 2>&1 &
 ```
 
 Set `SIRIUS_LOG_LEVEL=debug` for verbose GPU execution logs (very noisy).
 
-### Docker
+### Container image (podman / docker)
 
-A combined MO + GPU sidecar image is defined in `docker/Dockerfile`:
+A combined MO + GPU sidecar image is defined in `docker/Dockerfile`. The
+canonical build entrypoint is `docker/build.sh`, which defaults to
+`podman` (override with `BUILD_ENGINE=docker`):
 
 ```bash
-docker build -t mo-sirius:latest -f docker/Dockerfile \
-  --build-arg MO_REPO=https://github.com/matrixorigin/matrixone.git \
-  --build-arg MO_BRANCH=main \
-  .
+./docker/build.sh                          # uses ../mo-tpch by default
+MO_TPCH_DIR=/path/to/mo-tpch ./docker/build.sh
+IMAGE_TAG=mo-sirius:dev ./docker/build.sh
+BUILD_ENGINE=docker ./docker/build.sh
 ```
 
-A typical run with all three bind-mounts (data, TPC-H scratch, logs):
+A typical run with all bind-mounts (data, TPC-H scratch, logs, sirius
+config) — daemonized so we can drive it later via `podman exec`:
 
 ```bash
 mkdir -p $(pwd)/{mo-data,tpch-data,log}
-docker run --gpus all -p 6001:6001 -p 8888:8888 -p 9999:9999 \
+podman run -d --name mo-sirius --device nvidia.com/gpu=all \
+  -p 6001:6001 -p 8888:8888 -p 9999:9999 \
   -v $(pwd)/mo-data:/mo-data \
   -v $(pwd)/tpch-data:/opt/mo-tpch/data \
   -v $(pwd)/log:/log \
+  -v $(pwd)/sirius.yaml:/etc/sidecar/sirius.yaml:ro \
   mo-sirius:latest
 ```
+
+> **GPU access:** podman uses CDI (`--device nvidia.com/gpu=all` or
+> `=<index>` / `=<UUID>` to pin one GPU). Docker users substitute
+> `--gpus all`.
 
 What each mount is for:
 
@@ -217,7 +213,7 @@ switch to route queries through MO native, the CPU sidecar, or the
 GPU sidecar:
 
 ```bash
-# inside the running container (or via docker exec):
+# inside the running container (or via podman exec):
 tpch-bench 1                          # SF=1, all phases, ENGINE=native (default)
 SF=10 tpch-bench                      # SF=10
 GEN=0 LOAD=0 tpch-bench 10            # SF=10, queries only
@@ -233,6 +229,20 @@ DATA_DIR=/data/sf10 tpch-bench 10     # bind-mount /data for large SFs
 line of every query before piping to `mariadb --comments`, so MO
 forwards the rewritten SQL to the in-container sidecar at
 `http://127.0.0.1:9999`.
+
+To drive the bench from the host against the daemonized container above,
+use `podman exec`:
+
+```bash
+podman exec mo-sirius bash -lc 'ENGINE=gpu tpch-bench 10'
+
+# Reuse already-loaded data — queries only:
+podman exec mo-sirius bash -lc 'ENGINE=gpu GEN=0 CTAB=0 LOAD=0 tpch-bench 10'
+
+# Run in the background (detached); follow output via the /log bind-mount:
+podman exec -d mo-sirius bash -lc 'ENGINE=gpu tpch-bench 10'
+tail -f log/tpch/*/run.log
+```
 
 **Container logs.** MO and the sidecar run at debug level by default
 and would otherwise flood the host's syslog through the journald log
@@ -256,22 +266,14 @@ on the host, or set `LOG_DIR` to a different in-container path.
 
 **Runtime configuration overrides.** The image ships a default
 `sirius.yaml` at `/etc/sidecar/sirius.yaml` and MO configs at
-`/etc/launch/*.toml`. Any of them can be overridden without rebuilding
-the image:
-
-- **Bind-mount a replacement file** — the simplest approach:
-
-  ```bash
-  docker run --gpus all -p 6001:6001 -p 9999:9999 \
-    -v /host/path/sirius.yaml:/etc/sidecar/sirius.yaml:ro \
-    -v /host/configs/launch.toml:/etc/launch/launch.toml:ro \
-    mo-sirius:latest
-  ```
+`/etc/launch/*.toml`. The typical run above already shows the
+sirius.yaml bind-mount; you can do the same for the MO configs, or
+bypass them entirely:
 
 - **Point `SIRIUS_CONFIG_FILE` at a custom path:**
 
   ```bash
-  docker run --gpus all ... \
+  podman run --device nvidia.com/gpu=all ... \
     -v /host/configs:/custom:ro \
     -e SIRIUS_CONFIG_FILE=/custom/my-sirius.yaml \
     mo-sirius:latest
@@ -282,7 +284,7 @@ the image:
   `MO_LAUNCH_CONF` are passed through:
 
   ```bash
-  docker run --gpus all ... \
+  podman run --device nvidia.com/gpu=all ... \
     -e SIRIUS_TAE_BASELINE_COLS=6 \
     -e SIRIUS_LOG_LEVEL=info \
     -e DUCKDB_HTTPSERVER_AUTH=my-secret-token \
@@ -377,9 +379,6 @@ mariadb --skip-ssl -h 127.0.0.1 -P 6001 -u dump -p111 --comments
   a dedicated `http.Transport` to avoid this — see `pkg/frontend/sidecar_offload.go`.
 - **GPU VRAM limits:** Multi-table joins at SF100+ may hang if the GPU has
   insufficient VRAM (tested: RTX 3070 8GB handles SF10 fully, SF100 Q1-Q2 only).
-- **GPU scan overhead at small scale:** At SF10, the GPU TAE scan path is ~2.5× slower
-  than CPU due to host→GPU transfer overhead dominating. The GPU path is designed for
-  SF100+ where nvCOMP LZ4 throughput (~300 GB/s) far exceeds CPU decompression (~4 GB/s).
 
 ## How it works
 
