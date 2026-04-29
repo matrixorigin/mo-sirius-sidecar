@@ -72,8 +72,8 @@ RUN cd sirius && pixi run -- bash -c '\
         -DEXTENSION_STATIC_BUILD=1 \
         -DCMAKE_CXX_COMPILER=${CONDA_PREFIX}/bin/clang++ \
         -DCMAKE_C_COMPILER=${CONDA_PREFIX}/bin/clang \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER= \
+        -DCMAKE_C_COMPILER_LAUNCHER= \
         -DCMAKE_LINKER_TYPE=MOLD \
         -DDUCKDB_EXTENSION_CONFIGS=$(pwd)/../extension_config_gpu.cmake && \
     ninja -C ../build/release-gpu'
