@@ -390,7 +390,7 @@ class native_result_stream final : public flight::FlightDataStream {
 	std::shared_ptr<arrow::Schema> schema() override { return arrow::schema({}); }
 	arrow::Result<flight::FlightPayload> GetSchemaPayload() override {
 		flight::FlightPayload payload;
-		// Flight requires a leading Arrow IPC schema even though protocol v5
+		// Flight requires a leading Arrow IPC schema even though protocol v4
 		// carries no Arrow result data. Emit an empty transport schema; the exact
 		// MO physical schema was already echoed in FlightInfo.schema.
 		auto empty_schema = schema();
